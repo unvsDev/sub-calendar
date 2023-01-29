@@ -6,7 +6,7 @@
 // https://github.com/unvsDev/sub-calendar
 
 
-const version = "4.0"
+const version = "4.2"
 
 let fm = FileManager.iCloud()
 let filePath = fm.documentsDirectory() + "/SubCalendarLocal.json"
@@ -39,6 +39,7 @@ let userData = {
   },
   "service": {},
   "exchangeRates": {},
+  "flagFetch": [],
 }
 
 if(fm.fileExists(filePath)){
@@ -61,9 +62,16 @@ const checkmark = "✓"
 const cycleTypes = ["일마다", "개월마다", "년마다"]
 const filterTypes = ["생성일", "다음 갱신일", "구독 이름", "구독 가격"]
 const notiTypes = [["결제 하루 전", "결제 3일 전", "결제 7일 전"], [86400000, 259200000, 604800000]]
-const detailTextTypes = ["결제 주기", "카테고리", "태그", "결제 수단"]
+const detailTextTypes = ["결제 금액 및 구독 주기", "카테고리", "태그", "결제 수단"]
+const widgetDisplayTypes = ["기기 테마 사용", "라이트 모드", "다크 모드"]
 
-const supportedPayments = ["KB국민카드", "신한카드", "하나카드", "롯데카드", "BC카드", "NH농협카드", "삼성카드", "현대카드", "MasterCard", "Visa", "토스페이", "카카오페이", "PAYCO", "네이버페이", "스마일페이", "Pay"]
+const supportedPayments = [
+  "MasterCard", "Visa", "UnionPay", "American Express", "JCB", "PayPal", "Stripe",
+  "NH농협은행", "KB국민은행", "신한은행", "우리은행", "IBK기업은행", "하나은행", "카카오뱅크", "토스뱅크", "케이뱅크", "로컬 은행",
+  "KB국민카드", "신한카드", "하나카드", "롯데카드", "BC카드", "NH농협카드", "삼성카드", "현대카드",
+  "카카오페이", "토스페이", "PAYCO", "네이버페이", "스마일페이", "Apple Pay", "Google Pay",
+  "기타"
+]
 
 let exchangeRates = {}
 let supportedExchangeTags = []
@@ -166,7 +174,7 @@ let pendingNotifier = []
 let pendingNotiIdentifier = []
 function fetchEarlyNotification(targetDates, nextChargeDate, identifier){
   for(index in targetDates){
-    if(targetDates[index] < dt){ continue }
+    if(targetDates[index] + userData.notiDelay < dt){ continue }
     let dataIndex = userData.subscriptions.findIndex(tempObject => tempObject.identifier == identifier)
     let subObject = userData.subscriptions[dataIndex]
     
@@ -449,7 +457,7 @@ async function showTagPicker(target){
 }
 
 // 구독 항목 선택
-async function showSubscriptionsPicker(target){
+async function showSubscriptionsPicker(target, applyFlag){
   let subResponse = []
   if(target != undefined){ subResponse = target }
   
@@ -459,6 +467,8 @@ async function showSubscriptionsPicker(target){
   function loadPicker(){
     for(index in userData.subscriptions){
       let sbSubject = userData.subscriptions[index]
+      if(applyFlag && sbSubject.flagExcludeFromWidget != undefined){ continue }
+      
       let sbObject = new UITableRow()
       sbObject.dismissOnSelect = false
       
@@ -540,10 +550,16 @@ async function showSubConfiguratorTable(preset){
     table.addRow(titleRow)
     
     let subTitleRow = new UITableRow()
-    subTitleRow.height = 60
+    subTitleRow.height = 65
     subTitleRow.dismissOnSelect = false
     
     let subTitleText = subTitleRow.addText("구독 이름", subObject.title)
+    subTitleText.widthWeight = 70
+    
+    let importButton = subTitleRow.addButton("자동으로 채우기")
+    importButton.rightAligned()
+    importButton.dismissOnTap = false
+    importButton.widthWeight = 30
     
     table.addRow(subTitleRow)
     
@@ -564,8 +580,98 @@ async function showSubConfiguratorTable(preset){
       refreshTable()
     }
     
+    importButton.onTap = async () => {
+      // 온라인에서 채우기
+      let impData = {}
+      let picker = new UITable()
+      picker.showSeparators = true
+      
+      function loadPicker(){
+        let infoRow = new UITableRow()
+        infoRow.height = 70
+        infoRow.dismissOnSelect = false
+        
+        let infoText = infoRow.addText("• 서브 캘린더에서 제공하는 데이터는 특정 서비스와 연관되지 않아요" +
+        "\n• 제공하는 데이터가 예고 없이 변경되거나 제거될 수 있어요")
+        infoText.titleFont = Font.systemFont(14)
+        infoText.titleColor = Color.dynamic(Color.gray(), Color.lightGray())
+        
+        picker.addRow(infoRow)
+        
+        for(catTag in impData){
+          let catTitleRow = new UITableRow()
+          catTitleRow.isHeader = true
+          catTitleRow.addText(impData[catTag].categoryName)
+          
+          picker.addRow(catTitleRow)
+          
+          for(let i = 1; i <= parseInt(impData[catTag].itmCount); i++){
+            let impObject = impData[catTag][i]
+            
+            let impSubject = new UITableRow()
+            impSubject.height = 70
+            
+            let subCycleString = impObject.cycle + cycleTypes[impObject.cycleType].replace("마다", "")
+            
+            let impDetailText = impSubject.addText(impObject.title,
+              subCycleString + " 정기구독 · " +
+              impObject.price.toLocaleString() + (impObject.currency == "KRW" ? "원" : (" " + impObject.currency))
+              + " · " + impObject.category)
+            impDetailText.titleFont = Font.systemFont(17)
+            impDetailText.subtitleFont = Font.systemFont(14)
+            impDetailText.subtitleColor = Color.dynamic(Color.gray(), Color.lightGray())
+            
+            picker.addRow(impSubject)
+            
+            impSubject.onSelect = () => {
+              if(userData.categories.indexOf(impObject.category) == -1){
+                userData.categories.push(impObject.category)
+              }
+              
+              for(index in impObject){
+                subObject[index] = impObject[index]
+              }
+              
+              refreshTable()
+            }
+          }
+        }
+        
+        let submitButton = new UITableRow()
+        submitButton.dismissOnSelect = false
+        
+        let submitText = submitButton.addText("찾는 컨텐츠가 리스트에 없어요")
+        submitText.titleColor = Color.blue()
+        
+        picker.addRow(submitButton)
+        
+        submitButton.onSelect = async () => {
+          await Safari.open("https://forms.gle/tub2zVZsKiJawwBRA")
+        }
+      }
+      
+      function refreshPicker(){
+        picker.removeAllRows()
+        loadPicker()
+        picker.reload()
+      }
+      
+      try {
+        impData = await new Request("https://gist.github.com/unvsDev/17ef32d45493cf14ec98b108c57201c5/raw/subscriptions.json").loadJSON()
+        
+        loadPicker()
+        await picker.present()
+      } catch(e){
+        let errAlert = new Alert()
+        errAlert.title = e.name
+        errAlert.message = e.message
+        errAlert.addAction("Done")
+        await errAlert.presentAlert()
+      }
+    }
+    
     let subPriceRow = new UITableRow()
-    subPriceRow.height = 60
+    subPriceRow.height = 65
     subPriceRow.dismissOnSelect = false
     
     let subPriceText = subPriceRow.addText("구독 가격", getSubPriceString())
@@ -641,7 +747,7 @@ async function showSubConfiguratorTable(preset){
     }
     
     let subCycleRow = new UITableRow()
-    subCycleRow.height = 60
+    subCycleRow.height = 65
     subCycleRow.dismissOnSelect = false
     
     subCycleRow.addText("결제 주기", subObject.cycle ? subObject.cycle + cycleTypes[subObject.cycleType] + " 갱신" : "눌러서 검토")
@@ -700,7 +806,7 @@ async function showSubConfiguratorTable(preset){
     }
     
     let subInitDateRow = new UITableRow()
-    subInitDateRow.height = 60
+    subInitDateRow.height = 65
     subInitDateRow.dismissOnSelect = false
     
     subInitDateRow.addText("결제 시작일", getDateString("yyyy년 M월 d일", new Date(subObject.nextChargeDate)))
@@ -715,6 +821,9 @@ async function showSubConfiguratorTable(preset){
         let userSelection = await dp.pickDate()
         subObject.nextChargeDate = userSelection.setHours(0,0,0,0)
       } catch(e){ }
+      
+      if(dt < subObject.nextChargeDate){ subObject.flagTrialPeriod = true }
+      else if(subObject.flagTrialPeriod != undefined){ delete subObject.flagTrialPeriod }
       
       refreshTable()
     }
@@ -739,9 +848,27 @@ async function showSubConfiguratorTable(preset){
       }
     }
     
+    let subTrialRow = new UITableRow()
+    subTrialRow.dismissOnSelect = false
+    
+    let subTrialText = subTrialRow.addText((subObject.flagTrialPeriod != undefined ? (checkmark + " ") : "")
+      + "무료 체험 또는 제휴 표시")
+    subTrialText.titleFont = Font.mediumSystemFont(15)
+    
+    table.addRow(subTrialRow)
+    
+    subTrialRow.onSelect = () => {
+      if(subObject.flagTrialPeriod != undefined){
+        delete subObject.flagTrialPeriod
+      } else {
+        subObject.flagTrialPeriod = true
+      }
+      refreshTable()
+    }
+    
     // 추가 항목
     let subCategoryRow = new UITableRow()
-    subCategoryRow.height = 60
+    subCategoryRow.height = 65
     subCategoryRow.dismissOnSelect = false
     
     subCategoryRow.addText("카테고리", subObject.category)
@@ -759,7 +886,7 @@ async function showSubConfiguratorTable(preset){
     }
     
     let subTagRow = new UITableRow()
-    subTagRow.height = 60
+    subTagRow.height = 65
     subTagRow.dismissOnSelect = false
     
     subTagRow.addText("태그", subObject.tags != undefined ? (subObject.tags.length ? (subObject.tags.join(", ")) : "없음") : "없음")
@@ -795,7 +922,7 @@ async function showSubConfiguratorTable(preset){
     }
     
     let subCardRow = new UITableRow()
-    subCardRow.height = 60
+    subCardRow.height = 65
     subCardRow.dismissOnSelect = false
     
     subCardRow.addText("결제 수단", subObject.payment)
@@ -810,7 +937,7 @@ async function showSubConfiguratorTable(preset){
     }
     
     let subSharedRow = new UITableRow()
-    subSharedRow.height = 60
+    subSharedRow.height = 65
     subSharedRow.dismissOnSelect = false
     
     subSharedRow.addText("공유 계정", subObject.sharedAccount)
@@ -839,7 +966,7 @@ async function showSubConfiguratorTable(preset){
     }
     
     let subLocalRow = new UITableRow()
-    subLocalRow.height = 60
+    subLocalRow.height = 65
     subLocalRow.dismissOnSelect = false
     
     subLocalRow.addText("소유자 정보", subObject.localAccount)
@@ -867,6 +994,33 @@ async function showSubConfiguratorTable(preset){
       table.addRow(subLocalRow)
     }
     
+    let subMemoRow = new UITableRow()
+    subMemoRow.height = 80
+    subMemoRow.dismissOnSelect = false
+    
+    let subMemoText = subMemoRow.addText("메모", subObject.memo)
+    subMemoText.subtitleColor = Color.dynamic(Color.gray(), Color.lightGray())
+    
+    
+    subMemoRow.onSelect = async () => {
+      let alert = new Alert()
+      alert.title = "메모 입력"
+      alert.addTextField("", subObject.memo)
+      alert.addAction("Done")
+      alert.addCancelAction("Cancel")
+      
+      let response = await alert.presentAlert()
+      if(response != -1){
+        subObject.memo = alert.textFieldValue()
+      }
+      
+      refreshTable()
+    }
+    
+    if(subObject.memo != undefined){
+      table.addRow(subMemoRow)
+    }
+    
     let subAdderRow = new UITableRow()
     subAdderRow.dismissOnSelect = false
     
@@ -882,10 +1036,11 @@ async function showSubConfiguratorTable(preset){
       alert.addAction("결제 수단")
       alert.addAction("공유 계정")
       alert.addAction("소유자 정보")
+      alert.addAction("메모")
       
       alert.addCancelAction("Cancel")
       
-      let response = await alert.presentSheet()
+      let response = await alert.presentAlert()
       
       if(response == 0){
         subObject.category = ""
@@ -897,6 +1052,8 @@ async function showSubConfiguratorTable(preset){
         subObject.sharedAccount = ""
       } else if(response == 4){
         subObject.localAccount = ""
+      } else if(response == 5){
+        subObject.memo = ""
       }
       
       refreshTable()
@@ -935,10 +1092,13 @@ async function showSubConfiguratorTable(preset){
       let scRenewal = getLatestRenewal(new Date(subObject.nextChargeDate), temp)
       
       let nextDueDateRow = new UITableRow()
+      nextDueDateRow.height = 70
       nextDueDateRow.dismissOnSelect = false
       
-      let nextDueDateText = nextDueDateRow.addText("다음 결제일: " + getDateString("yyyy년 M월 d일", new Date(scRenewal.date)))
-      nextDueDateText.titleColor = Color.blue()
+      let nextDueDateText = nextDueDateRow.addText("최근 결제 보기", "다음 결제일: " + getDateString("yyyy년 M월 d일", new Date(scRenewal.date)))
+      nextDueDateText.titleFont = Font.systemFont(17)
+      nextDueDateText.subtitleFont = Font.systemFont(14)
+      nextDueDateText.subtitleColor = Color.dynamic(Color.gray(), Color.lightGray())
       
       table.addRow(nextDueDateRow)
       
@@ -969,6 +1129,40 @@ async function showSubConfiguratorTable(preset){
           
           await picker.present()
         }
+      }
+      
+      let flagRow1 = new UITableRow()
+      flagRow1.dismissOnSelect = false
+      
+      let flagText1 = flagRow1.addText((subObject.flagExcludeFromStat != undefined ? (checkmark + " ") : "")
+          + "이 항목을 구독 통계에서 제외")
+      
+      table.addRow(flagRow1)
+      
+      flagRow1.onSelect = () => {
+        if(subObject.flagExcludeFromStat != undefined){
+          delete subObject.flagExcludeFromStat
+        } else {
+          subObject.flagExcludeFromStat = true
+        }
+        refreshTable()
+      }
+      
+      let flagRow2 = new UITableRow()
+      flagRow2.dismissOnSelect = false
+      
+      let flagText2 = flagRow2.addText((subObject.flagExcludeFromWidget != undefined ? (checkmark + " ") : "")
+          + "이 항목을 위젯에서 제외")
+      
+      table.addRow(flagRow2)
+      
+      flagRow2.onSelect = () => {
+        if(subObject.flagExcludeFromWidget != undefined){
+          delete subObject.flagExcludeFromWidget
+        } else {
+          subObject.flagExcludeFromWidget = true
+        }
+        refreshTable()
       }
       
       let removeRow = new UITableRow()
@@ -1028,27 +1222,6 @@ async function showNotificationPicker(){
     enableRow.onSelect = () => {
       userData.enableNoti = 1 - userData.enableNoti
       userData.notifications = {}
-    }
-    
-    let testNotiRow = new UITableRow()
-    testNotiRow.dismissOnSelect = false
-    
-    let testNotiText = testNotiRow.addText("데모 알림 보기")
-    testNotiText.titleColor = Color.blue()
-    
-    //picker.addRow(testNotiRow)
-    
-    testNotiRow.onSelect = async () => {
-      let testNoti = new Notification()
-      testNoti.title = "데모 구독 → 7일 전"
-      testNoti.body = "7,900원 · 1개월 · 결제수단"
-      await testNoti.schedule()
-      
-      let alert = new Alert()
-      alert.title = "데모 알림이 전송되었습니다."
-      alert.addAction("Done")
-      
-      await alert.presentAlert()
     }
     
     if(userData.enableNoti){
@@ -1171,20 +1344,14 @@ async function showNotificationPicker(){
         let table = new UITable()
         table.showSeparators = true
         
-        let infoRow = new UITableRow()
-        infoRow.height = 60
-        
-        let infoText = infoRow.addText("• Scriptable → Settings → Notifications\n• Scheduled Identifiers")
-        infoText.titleFont = Font.boldSystemFont(14)
-        infoText.titleColor = Color.gray()
-        
-        table.addRow(infoRow)
-        
         for(index in allPending){
           let row = new UITableRow()
-          let text = row.addText(allPending[index].identifier)
-          text.titleFont = Font.mediumMonospacedSystemFont(13)
-          text.titleColor = Color.gray()
+          row.height = 55
+          
+          let text = row.addText(allPending[index].title, allPending[index].body)
+          text.titleFont = Font.systemFont(14)
+          text.subtitleFont = Font.systemFont(14)
+          text.subtitleColor = Color.gray()
           
           table.addRow(row)
         }
@@ -1227,29 +1394,37 @@ async function showStatTable(){
       "global": 0,
       "category": {},
       "payment": {},
+      "excludedCnt": 0,
     }
     
     // 구독 데이터에서 정보 추출, 구독 가격 환산
     for(index in userData.subscriptions){
       let subObject = userData.subscriptions[index]
-      let initialPrice
-      if(subObject.currency == "KRW"){
-        initialPrice = subObject.price
-      } else if(subObject.currency == "IDR(100)" || subObject.currency == "JPY(100)"){
-        let productRate = subObject.price / 100 * parseFloat(exchangeRates.data[supportedExchangeTags.indexOf(subObject.currency)].deal_bas_r.replace(",", ""))
-        initialPrice = productRate
-        statObject.global++
-      } else {
-        let productRate = subObject.price * parseFloat(exchangeRates.data[supportedExchangeTags.indexOf(subObject.currency)].deal_bas_r.replace(",", ""))
-        initialPrice = productRate
-        statObject.global++
+      
+      // blacklist 처리
+      if(subObject.flagExcludeFromStat != undefined){ statObject.excludedCnt++; continue; }
+      
+      let initialPrice = 0
+      if(subObject.flagTrialPeriod == undefined){
+        if(subObject.currency == "KRW"){
+          initialPrice = subObject.price
+        } else if(subObject.currency == "IDR(100)" || subObject.currency == "JPY(100)"){
+          let productRate = subObject.price / 100 * parseFloat(exchangeRates.data[supportedExchangeTags.indexOf(subObject.currency)].deal_bas_r.replace(",", ""))
+          initialPrice = productRate
+          statObject.global++
+        } else {
+          let productRate = subObject.price * parseFloat(exchangeRates.data[supportedExchangeTags.indexOf(subObject.currency)].deal_bas_r.replace(",", ""))
+          initialPrice = productRate
+          statObject.global++
+        }
+        
+        if(subObject.cycleType == 2){ initialPrice /= subObject.cycle * 12 }
+        else if(subObject.cycleType == 1){ initialPrice /= subObject.cycle }
+        else if(subObject.cycleType == 0){ initialPrice = initialPrice / subObject.cycle * 30 }
+        
+        statObject.price += initialPrice
       }
       
-      if(subObject.cycleType == 2){ initialPrice /= subObject.cycle * 12 }
-      else if(subObject.cycleType == 1){ initialPrice /= subObject.cycle }
-      else if(subObject.cycleType == 0){ initialPrice = initialPrice / subObject.cycle * 30 }
-      
-      statObject.price += initialPrice
       if(subObject.category != undefined && subObject.category != ""){
         if(statObject.category[subObject.category] == undefined){
           statObject.category[subObject.category] = initialPrice
@@ -1371,6 +1546,17 @@ async function showStatTable(){
       
       table.addRow(row)
     }
+    
+    if(statObject.excludedCnt > 0){
+      let infoRow = new UITableRow()
+      infoRow.dismissOnSelect = false
+      
+      let infoText = infoRow.addText("• " + statObject.excludedCnt + "개 항목이 구독 통계에서 제외되었어요")
+      infoText.titleFont = Font.systemFont(14)
+      infoText.titleColor = Color.dynamic(Color.gray(), Color.lightGray())
+      
+      table.addRow(infoRow)
+    }
   }
   
   function refreshTable(){
@@ -1385,6 +1571,16 @@ async function showStatTable(){
 
 // ListWidget 관리
 async function showWidgetPreferenceTable(){
+  if(userData.flagFetch.indexOf("4.1") == -1){
+    // Feat: fetch widgetPresets.forEach => displayType
+    for(i in userData.widgetPresets){
+      if(userData.widgetPresets[i].displayType == undefined){
+        userData.widgetPresets[i].displayType = 0
+      }
+    }
+    userData.flagFetch.push("4.1")
+  }
+  
   let table = new UITable()
   table.showSeparators = true
   
@@ -1430,13 +1626,31 @@ async function showWidgetPreferenceTable(){
     
     table.addRow(seperator)
     
+    let prefRow0 = new UITableRow()
+    prefRow0.height = 60
+    prefRow0.dismissOnSelect = false
+    
+    let prefText0 = prefRow0.addText("화면 모드", widgetDisplayTypes[userData.widgetPresets.default.displayType])
+    
+    table.addRow(prefRow0)
+    
+    prefRow0.onSelect = async () => {
+      let alert = new Alert()
+      alert.title = "화면 모드"
+      for(i in widgetDisplayTypes){ alert.addAction(widgetDisplayTypes[i]) }
+      alert.addCancelAction("Cancel")
+      let response = await alert.presentAlert()
+      if(response != -1){ userData.widgetPresets.default.displayType = response }
+      refreshTable()
+    }
+    
     let prefRow = new UITableRow()
     prefRow.height = 60
     prefRow.dismissOnSelect = false
     
     let prefText = prefRow.addText("강조 색상", userData.widgetPresets.default.accentColor)
     
-    table.addRow(prefRow)
+    // table.addRow(prefRow)
     
     prefRow.onSelect = async () => {
       let alert = new Alert()
@@ -1509,7 +1723,7 @@ async function showWidgetPreferenceTable(){
     table.addRow(prefRow4)
     
     prefRow4.onSelect = async () => {
-      let userSelection = await showSubscriptionsPicker(userData.widgetPresets.default.targetIdentifiers)
+      let userSelection = await showSubscriptionsPicker(userData.widgetPresets.default.targetIdentifiers, applyFlag = true)
       if(userSelection == -1){ throw -1 }
       userData.widgetPresets.default.targetIdentifiers = userSelection
       refreshTable()
@@ -1544,7 +1758,7 @@ async function showWidgetPreferenceTable(){
     
     let prefText6 = prefRow6.addText("예상 결제 금액 표시", userData.widgetPresets.default.showPrice ? "켬" : "끔")
     
-    table.addRow(prefRow6)
+    // table.addRow(prefRow6)
     
     prefRow6.onSelect = async () => {
       let alert = new Alert()
@@ -1588,13 +1802,31 @@ async function showWidgetPreferenceTable(){
           }
         }
         
+        let prefRow0 = new UITableRow()
+        prefRow0.height = 60
+        prefRow0.dismissOnSelect = false
+        
+        let prefText0 = prefRow0.addText("화면 모드", widgetDisplayTypes[userData.widgetPresets[target].displayType])
+        
+        picker.addRow(prefRow0)
+        
+        prefRow0.onSelect = async () => {
+          let alert = new Alert()
+          alert.title = "화면 모드"
+          for(i in widgetDisplayTypes){ alert.addAction(widgetDisplayTypes[i]) }
+          alert.addCancelAction("Cancel")
+          let response = await alert.presentAlert()
+          if(response != -1){ userData.widgetPresets[target].displayType = response }
+          refreshPicker()
+        }
+        
         let prefRow = new UITableRow()
         prefRow.height = 60
         prefRow.dismissOnSelect = false
         
         let prefText = prefRow.addText("강조 색상", userData.widgetPresets[target].accentColor)
         
-        picker.addRow(prefRow)
+        // picker.addRow(prefRow)
         
         prefRow.onSelect = async () => {
           let alert = new Alert()
@@ -1667,7 +1899,7 @@ async function showWidgetPreferenceTable(){
         picker.addRow(prefRow4)
         
         prefRow4.onSelect = async () => {
-          let userSelection = await showSubscriptionsPicker(userData.widgetPresets[target].targetIdentifiers)
+          let userSelection = await showSubscriptionsPicker(userData.widgetPresets[target].targetIdentifiers, applyFlag = true)
           if(userSelection == -1){ throw -1 }
           userData.widgetPresets[target].targetIdentifiers = userSelection
           refreshPicker()
@@ -1702,7 +1934,7 @@ async function showWidgetPreferenceTable(){
         
         let prefText6 = prefRow6.addText("예상 결제 금액 표시", userData.widgetPresets[target].showPrice ? "켬" : "끔")
         
-        picker.addRow(prefRow6)
+        // picker.addRow(prefRow6)
         
         prefRow6.onSelect = async () => {
           let alert = new Alert()
@@ -1785,6 +2017,7 @@ async function showWidgetPreferenceTable(){
           "targetIdentifiers": [],
           "detailText": 0,
           "showPrice": 0,
+          "displayType": 0,
         }
       }
       
@@ -2371,6 +2604,8 @@ function buildWidget(specifiedWidgetFamily, showPreview, specifiedWidgetPreset){
   
   // userData에서 array 복사
   let localSubscriptions = JSON.parse(JSON.stringify(userData.subscriptions))
+  // blacklist 처리
+  localSubscriptions = localSubscriptions.filter(tempObject => tempObject.flagExcludeFromWidget == undefined)
   
   let session = userData.widgetPresets[sessionPreset]
   
@@ -2438,33 +2673,28 @@ function buildWidget(specifiedWidgetFamily, showPreview, specifiedWidgetPreset){
     
     let itmLength = Math.min(5, localSubscriptions.length)
     
-    for(let i = 0; i < itmLength; i++){
+    for(let i = 0; i < 5; i++){
       let subObject = localSubscriptions[i]
-      /*
-      let temp = [0, 0, 0]
-      temp[subObject.cycleType] = subObject.cycle
-      let scRenewal = getLatestRenewal(new Date(subObject.nextChargeDate), temp)
-      */
+      
       let stack = widget.addStack()
       stack.centerAlignContent()
+      stack.size = new Size(0, 15)
+      stack.setPadding(0,0,0,0)
       
-      let icon = stack.addImage(SFSymbol.named("seal").image)
-      icon.tintColor = new Color(session.accentColor)
-      icon.imageSize = new Size(15, 15)
+      if(i < itmLength){
+        let icon = stack.addImage(SFSymbol.named("seal").image)
+        icon.tintColor = new Color(session.accentColor)
+        icon.imageSize = new Size(15, 15)
+        
+        stack.addSpacer(4)
+        
+        let subTitleText = stack.addText(subObject.title)
+        subTitleText.font = Font.systemFont(13)
+        subTitleText.textColor = new Color("dddddd")
+        subTitleText.lineLimit = 1
+      }
       
-      stack.addSpacer(4)
-      
-      let subTitleText = stack.addText(subObject.title)
-      subTitleText.font = Font.systemFont(13)
-      subTitleText.textColor = new Color("dddddd")
-      subTitleText.lineLimit = 1
-      /*
-      let subPeriodText = stack.addText(" • " + (!getDayCount(new Date(scRenewal.date)) ? "오늘" : getRelativeDateString(new Date(scRenewal.date), new Date(new Date(dt).setHours(0,0,0,0)))))
-      subPeriodText.font = Font.boldMonospacedSystemFont(13)
-      subPeriodText.textColor = new Color("2edab7")
-      subPeriodText.lineLimit = 1
-      */
-      if(i != itmLength-1){ widget.addSpacer(4) }
+      if(i != 4){ widget.addSpacer(4) }
     }
     
     widget.backgroundColor = new Color("1a1a1a")
@@ -2479,6 +2709,7 @@ function buildWidget(specifiedWidgetFamily, showPreview, specifiedWidgetPreset){
     
     let vStack = widget.addStack()
     vStack.layoutVertically()
+    vStack.cornerRadius = 15
     
     for(let i = 0; i < itmVCount; i++){
       let hStack = vStack.addStack()
@@ -2486,18 +2717,26 @@ function buildWidget(specifiedWidgetFamily, showPreview, specifiedWidgetPreset){
       for(let j = 0; j < itmHCount; j++){
         itmIndex++
         
-        let itmStack = hStack.addStack()
+        let itmStack0 = hStack.addStack()
+        
+        let vSpacer = itmStack0.addStack()
+        vSpacer.layoutVertically()
+        vSpacer.addSpacer()
+        
+        let itmStack = itmStack0.addStack()
         itmStack.layoutVertically()
         
         let hSpacer = itmStack.addStack()
         hSpacer.addSpacer()
         
         if(itmIndex < itmLength){
-          itmStack.cornerRadius = 15
-          itmStack.backgroundColor = new Color("242424")
-          itmStack.setPadding(6,9,0,9)
+          itmStack0.cornerRadius = 11
+          // itmStack0.backgroundColor
+          itmStack0.setPadding(8,8,8,8)
           
           let subObject = localSubscriptions[itmIndex]
+          
+          itmStack0.url = "scriptable:///run?scriptName=" + encodeURI(Script.name()) + "&action=subPreference&targetIdentifier=" + subObject.identifier
           
           let getSubPriceString = () => {
             if(subObject.price == 0){ return "가격 미정" }
@@ -2518,41 +2757,32 @@ function buildWidget(specifiedWidgetFamily, showPreview, specifiedWidgetPreset){
           temp[subObject.cycleType] = subObject.cycle
           let scRenewal = getLatestRenewal(new Date(subObject.nextChargeDate), temp)
           
-          let detailText
+          let detailText = null
           if(session.detailText == 0){
             let subCycleString = subObject.cycle + cycleTypes[subObject.cycleType].replace("마다", "")
-            detailText = subCycleString + " 정기구독 · 주기 " + scRenewal.count
+            detailText = getSubPriceString()
           } else if(session.detailText == 1){
-            detailText = subObject.category == undefined ? "카테고리 없음" : subObject.category
+            detailText = subObject.category == undefined ? null : subObject.category
           } else if(session.detailText == 2){
             if(subObject.tags == undefined){
-              detailText = "태그 없음"
+              detailText = null
             } else if(!subObject.tags.length){
-              detailText = "태그 없음"
+              detailText = null
             } else if(subObject.tags.length < 2){
               detailText = subObject.tags[0]
             } else {
               detailText = subObject.tags[0] + " 및 " + (subObject.tags.length-1) + "개"
             }
           } else if(session.detailText == 3){
-            detailText = subObject.payment == undefined ? "결제 수단 없음" : subObject.payment
+            detailText = subObject.payment == undefined ? null : subObject.payment
           }
           
           let stack1 = itmStack.addStack()
           stack1.centerAlignContent()
           
-          let icon = stack1.addImage(SFSymbol.named("seal").image)
-          icon.tintColor = new Color(session.accentColor)
-          icon.imageSize = new Size(22, 22)
-          
-          stack1.addSpacer(3)
-          
-          let subTitleText = stack1.addText(subObject.title)
-          subTitleText.font = Font.boldSystemFont(14)
-          subTitleText.textColor = new Color("dddddd")
-          subTitleText.lineLimit = 1
-          
-          itmStack.addSpacer(5)
+          let subTitleText = itmStack.addText(subObject.title)
+          subTitleText.font = Font.semiboldSystemFont(16)
+          subTitleText.lineLimit = 2
           
           let stack2 = itmStack.addStack()
           stack2.centerAlignContent()
@@ -2560,27 +2790,77 @@ function buildWidget(specifiedWidgetFamily, showPreview, specifiedWidgetPreset){
           let todayPayString = widgetFamily == "large" ? "오늘 결제" : "오늘"
           let subPeriodString = !getDayCount(new Date(scRenewal.date)) ? todayPayString : getRelativeDateString(new Date(scRenewal.date), new Date(new Date(dt).setHours(0,0,0,0)))
           
-          let subPeriodText = stack2.addText(subPeriodString + (session.showPrice ? (" • " + getSubPriceString()) : ""))
-          subPeriodText.font = Font.boldSystemFont(widgetFamily == "large" ? 13 : 12)
-          subPeriodText.textColor = new Color(session.accentColor)
-          subPeriodText.lineLimit = 1
+          let subPeriodText = stack2.addText(subPeriodString
+           + (detailText != null ? (" • " + detailText) : ""))
+          // + (session.showPrice ? (" • " + getSubPriceString()) : ""))
+          subPeriodText.font = Font.systemFont(13)
           
-          let subDetailText = itmStack.addText(detailText)
-          subDetailText.font = Font.systemFont(widgetFamily == "large" ? 12 : 11)
-          subDetailText.textColor = Color.lightGray()
-          subDetailText.lineLimit = 1
+          if(session.displayType == undefined || session.displayType == 0){
+            itmStack0.backgroundColor = Color.dynamic(new Color("F6F7F9"), new Color("1C1C1E"))
+            subTitleText.textColor = Color.dynamic(new Color("212327"), new Color("CCCCCC"))
+            subPeriodText.textColor = Color.dynamic(new Color("777777"), new Color("A1A3A6"))
+            
+          } else if(session.displayType == 1){
+            itmStack0.backgroundColor = new Color("F6F7F9")
+            subTitleText.textColor = new Color("212327")
+            subPeriodText.textColor = new Color("777777")
+            
+          } else if(session.displayType == 2){
+            itmStack0.backgroundColor = new Color("1C1C1E")
+            subTitleText.textColor = new Color("CCCCCC")
+            subPeriodText.textColor = new Color("A1A3A6")
+            
+          }
         }
         
-        itmStack.addSpacer()
-        
-        if(j != itmHCount - 1){ hStack.addSpacer(5) }
+        if(j != itmHCount - 1){ hStack.addSpacer(6) }
       }
       
-      if(i != itmVCount - 1){ vStack.addSpacer(5) }
+      if(i != itmVCount - 1){ vStack.addSpacer(6) }
     }
     
-    widget.backgroundColor = new Color("1a1a1a")
-    widget.setPadding(5,5,5,5)
+    if(widgetFamily == "large"){
+      let bottomStack = widget.addStack()
+      bottomStack.centerAlignContent()
+      bottomStack.setPadding(7,5,5,5)
+      
+      let curr_index = supportedExchangeTags.indexOf("USD")
+      let curr_val = parseFloat(exchangeRates.data[curr_index].deal_bas_r.replace(",", ""))
+      curr_val = Math.round(curr_val / 10) * 10
+      
+      let curr1 = bottomStack.addText("1달러 → 약 " + curr_val.toLocaleString() + "원")
+      curr1.font = Font.systemFont(13)
+      
+      bottomStack.addSpacer()
+      
+      let trigger1 = bottomStack.addText("구독 추가")
+      trigger1.font = Font.boldSystemFont(13)
+      trigger1.url = "scriptable:///run?scriptName=" + encodeURI(Script.name()) + "&action=addNewSub"
+      
+      if(session.displayType == undefined || session.displayType == 0){
+        curr1.textColor = Color.dynamic(new Color("444444"), new Color("A1A3A6"))
+        trigger1.textColor = Color.dynamic(new Color("444444"), new Color("A1A3A6"))
+        
+      } else if(session.displayType == 1){
+        curr1.textColor = new Color("444444")
+        trigger1.textColor = new Color("444444")
+        
+      } else if(session.displayType == 2){
+        curr1.textColor = new Color("A1A3A6")
+        trigger1.textColor = new Color("A1A3A6")
+        
+      }
+    }
+    
+    if(session.displayType == undefined || session.displayType == 0){
+      widget.backgroundColor = Color.dynamic(new Color("DCDFE8"), new Color("0E0E10"))
+    } else if(session.displayType == 1){
+      widget.backgroundColor = new Color("DCDFE8")
+    } else if(session.displayType == 2){
+      widget.backgroundColor = new Color("0E0E10")
+    }
+    
+    widget.setPadding(8,8,widgetFamily == "large" ? 3 : 8,8)
     
   } else if(widgetFamily == "accessoryRectangular"){
     let subObject = localSubscriptions[0]
@@ -2659,7 +2939,11 @@ if(config.runsInApp){
     
     App.close()
     return 0
+  } else if(qp.action == "subPreference"){
+    let dataIndex = userData.subscriptions.findIndex(tempObject => tempObject.identifier == qp.targetIdentifier)
+    await showSubConfiguratorTable(userData.subscriptions[dataIndex])
   }
+  
   await showSubListViewTable()
   await pushEarlyNotification()
   
